@@ -1,20 +1,27 @@
-```markdown
-#Principal – HTB Write-up
+
+Principal – HTB Write-up
 ---
-##Overview
+Overview
 Principal is a medium-difficulty machine that focuses on a recurring security failure: systems validating cryptographic structure without properly validating identity. The attack path involves two stages built on the same conceptual flaw—first in web authentication using JWT, and later in SSH certificate-based authentication.
 The compromise chain:
 1. JWT authentication bypass using an unsigned token wrapped in JWE
 2. Admin access → extraction of credentials
 3. SSH access via password reuse
 4. Privilege escalation through SSH CA misconfiguration
+
+<p align="center">
+  <img src="images/Screenshot_2026-05-05_19-26-01.png" width="700"/>
+</p>
+
 ---
 
 
 
 ## Reconnaissance
 I started with a standard Nmap scan:
-  
+<p align="center">
+  <img src="images/Screenshot_2026-05-05_19-28-03.png" width="700"/>
+</p>
 
 
 
@@ -27,18 +34,20 @@ X-Powered-By: pac4j-jwt/6.0.3
 
 This immediately suggested that authentication might be JWT-based.
 
+---
 
-________________
 
-
-Web Enumeration
+# Web Enumeration
 Accessing the web service redirected to a login page. Submitting credentials triggered a request to:
+```bash
 /api/auth/login
+```
 
 
 At this point, I checked the client-side JavaScript:
+```bash
 /static/js/app.js
-
+```
 
 This file turned out to be critical. It described the authentication flow:
 * Login returns a token
@@ -49,21 +58,25 @@ This file turned out to be critical. It described the authentication flow:
    * Internally signed (JWS)
 It also revealed a JWKS endpoint:
 /api/auth/jwks
-  
 
-________________
+<p align="center">
+  <img src="images/Screenshot_2026-05-05_19-29-02.png" width="700"/>
+</p>
 
 
-Understanding the Attack Surface
+---
+
+
+# Understanding the Attack Surface
 At this point, I initially made a mistake: I started looking into Jetty-related CVEs. That approach didn’t lead anywhere.
 The important detail was already in front of me:
 * The application uses pac4j-jwt
 * Authentication is token-based
-That shifted the focus from server exploitation to token manipulation.
-________________
+That ***shifted the focus from server exploitation to token manipulation.***
+---
 
 
-JWT Bypass
+# JWT Bypass
 The application uses JWE (encryption) and JWS (signature). Normally:
 * JWE ensures confidentiality
 * JWS ensures integrity
@@ -73,10 +86,10 @@ This meant I could:
 1. Create my own JWT
 2. Set arbitrary claims (e.g., admin role)
 3. Wrap it in a valid JWE
-________________
+---
 
 
-Crafting the Token
+# Crafting the Token
 I constructed a JWT with the following payload:
 {
   "sub": "admin",
@@ -93,32 +106,38 @@ The header:
 }
 
 
-Important detail: the JWT must end with a trailing dot to indicate no signature.
-________________
+***Important detail: the JWT must end with a trailing dot to indicate no signature.***
+---
 
 
-Wrapping in JWE
+# Wrapping in JWE
 The application requires tokens to be encrypted, so the raw JWT was not sufficient.
 Using the JWKS endpoint, I retrieved the server’s RSA public key and used it to encrypt the JWT into a JWE.
 Initially, I made another mistake here—I tried to manually construct the key instead of using the JWKS response directly. That resulted in invalid tokens. The correct approach was to use the key as provided.
-________________
+---
 
 
-Validation
+# Validation
 Once the token was generated, I tested it:
 curl -H "Authorization: Bearer <token>" \
 http://<target>:8080/api/dashboard
 
 
 The response confirmed that I was authenticated as admin.
-  
-________________
+<p align="center">
+  <img src="images/Screenshot_2026-05-05_19-30-34.png" width="700"/>
+</p>
 
-Data Extraction
+
+  
+---
+
+# Data Extraction
 With admin access, I queried:
+```bash
 /api/users
 /api/settings
-
+```
 
 This returned:
 * A list of users
@@ -127,30 +146,34 @@ D3pl0y_$$H_Now42!
 
 
 There was also a reference to:
+```bash
 /opt/principal/ssh/
-
+```
 
 This suggested a link to SSH configuration.
-  
+<p align="center">
+  <img src="images/Screenshot_2026-05-05_19-31-14.png" width="700"/>
+</p>
 
-________________
-
-
-SSH Access
+---
+# SSH Access
 Using the extracted password, I attempted SSH login:
+```bash
 ssh svc-deploy@10.129.54.29
-
+```
 
 This succeeded, confirming password reuse.  
+<p align="center">
+  <img src="images/Screenshot_2026-05-05_19-32-16.png" width="700"/>
+</p>
+---
 
 
-________________
-
-
-Privilege Escalation
+#Privilege Escalation
 From the settings output, I already knew to look at:
+```bash
 /opt/principal/ssh/
-
+```
 
 Listing the directory revealed:
 * ca (private key)
@@ -159,10 +182,10 @@ Listing the directory revealed:
 The README confirmed:
 * This CA is trusted by SSH
 * It is used for certificate-based authentication
-________________
+  
+---
 
-
-Understanding the Misconfiguration
+# Understanding the Misconfiguration
 In SSH certificate authentication:
 * The server trusts a CA
 * Any key signed by that CA is accepted
@@ -171,31 +194,35 @@ However, the system lacked proper principal validation:
 * The server only checks if the certificate is signed
 This means:
 If you control the CA private key, you can authenticate as any user
-________________
+---
 
-
-Exploitation
-Step 1: Generate a key
+# Exploitation
+## Step 1: Generate a key
+```bash
 ssh-keygen -t ed25519 -f /tmp/pwn -N ""
+```
 
-
-Step 2: Sign it as root
+## Step 2: Sign it as root
+```bash
 ssh-keygen -s /opt/principal/ssh/ca \
 -I "pwn-root" -n root -V +1h /tmp/pwn.pub
-
+```
 
 This creates a certificate that claims the identity root.
-Step 3: Login
+## Step 3: Login
+```bash
 ssh -i /tmp/pwn root@localhost
-
+```
+<p align="center">
+  <img src="images/Screenshot_2026-05-05_19-33-07.png" width="700"/>
+</p>
 
 Access was granted immediately.  
 
+---
 
-________________
 
-
-Key Mistakes and Lessons
+# Key Mistakes and Lessons
 1. Focusing on the wrong attack surface
 I initially looked into Jetty vulnerabilities instead of analyzing the authentication logic.
 Lesson: Always prioritize application logic over service banners.
@@ -236,4 +263,4 @@ Conclusion
 This machine is a good example of how secure cryptographic primitives can still lead to compromise when used incorrectly. The vulnerability is not in the algorithms, but in the assumptions made around them.
 The key takeaway is straightforward:
 Trust should never be based solely on cryptographic structure—identity must always be explicitly validated.
-```
+
