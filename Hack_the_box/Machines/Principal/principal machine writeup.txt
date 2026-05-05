@@ -1,19 +1,18 @@
-﻿Principal – HTB Write-up
-Overview
+```markdown
+#Principal – HTB Write-up
+---
+##Overview
 Principal is a medium-difficulty machine that focuses on a recurring security failure: systems validating cryptographic structure without properly validating identity. The attack path involves two stages built on the same conceptual flaw—first in web authentication using JWT, and later in SSH certificate-based authentication.
 The compromise chain:
 1. JWT authentication bypass using an unsigned token wrapped in JWE
 2. Admin access → extraction of credentials
 3. SSH access via password reuse
 4. Privilege escalation through SSH CA misconfiguration
+---
 
 
-  
 
-________________
-
-
-Reconnaissance
+## Reconnaissance
 I started with a standard Nmap scan:
   
 
@@ -237,3 +236,4 @@ Conclusion
 This machine is a good example of how secure cryptographic primitives can still lead to compromise when used incorrectly. The vulnerability is not in the algorithms, but in the assumptions made around them.
 The key takeaway is straightforward:
 Trust should never be based solely on cryptographic structure—identity must always be explicitly validated.
+```
